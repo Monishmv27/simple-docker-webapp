@@ -2,20 +2,15 @@ pipeline {
     // Runs on your remote EC2 instance where Maven and Docker are installed
     agent { label 'maven-agent' }
 
-    /*tools {
-        // Must match the exact names configured in Manage Jenkins > Tools
-        maven 'Maven-3.9' 
-        jdk 'JDK-17'
-    }*/
-        tools {
+    tools {
         maven 'Maven3'
         jdk 'JDK21'
     }
 
-
     environment {
-        DOCKER_IMAGE = "your-dockerhub-username/your-app-name"
-        SONAR_PROJECT_KEY = "your-sonarqube-project-key"
+        // Replace 'your-dockerhub-username' with your actual Docker Hub username
+        DOCKER_IMAGE      = "monish2703/simple-docker-webapp"
+        SONAR_PROJECT_KEY = "simple-docker-webapp"
     }
 
     stages {
@@ -34,8 +29,8 @@ pipeline {
 
         stage('SonarQube Code Analysis') {
             steps {
-                // Matches the SonarQube Server name in Manage Jenkins > System
-                withSonarQubeEnv('SonarQube-Local') {
+                // Updated to match your exact SonarQube Server name in Jenkins
+                withSonarQubeEnv('Local-SonarQube') {
                     sh """
                         mvn sonar:sonar \
                         -Dsonar.projectKey=${SONAR_PROJECT_KEY}
@@ -67,7 +62,7 @@ pipeline {
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
                     sh """
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
                         docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
                         docker logout
                     """
