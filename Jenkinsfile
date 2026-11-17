@@ -1,47 +1,56 @@
 pipeline {
-    // Runs on your remote EC2 instance where Maven and Docker are installed
-    agent { label 'maven-agent' }
+    agent { label 'maven-server' }
 
     tools {
-        maven 'Maven3'
-        jdk 'JDK21'
+        maven 'Maven3' // Must match Manage Jenkins > Tools
+        jdk 'JDK21'    // Must match Manage Jenkins > Tools
     }
 
     environment {
-        // Replace 'your-dockerhub-username' with your actual Docker Hub username
-        DOCKER_IMAGE      = "monish2703/simple-docker-webapp"
-        SONAR_PROJECT_KEY = "simple-docker-webapp"
+        DOCKERHUB_CRED_ID = 'dockerhub-credentials'
+        DOCKERHUB_REPO    = 'monish2703/simple-docker-webapp'
+        IMAGE_TAG         = "${env.BUILD_NUMBER}"
+        CONTAINER_NAME    = 'simple-docker-webapp'
+        APP_PORT          = '8080'
+    }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
     }
 
     stages {
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
-                // Pulls the code from your forked GitHub repository
-                checkout scm
+                git branch: 'main', url: 'https://github.com/Monishmv27/simple-docker-webapp.git'
             }
         }
 
-        stage('Build & Test with Maven') {
+        stage('Build & Test (Maven)') {
             steps {
-                sh 'mvn clean package'
+                sh 'mvn -B clean verify'
             }
-        }
-
-        stage('SonarQube Code Analysis') {
-            steps {
-                // Updated to match your exact SonarQube Server name in Jenkins
-                withSonarQubeEnv('Local-SonarQube') {
-                    sh """
-                        mvn sonar:sonar \
-                        -Dsonar.projectKey=${SONAR_PROJECT_KEY}
-                    """
+            post {
+                always {
+                    junit testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true
                 }
             }
         }
 
-        stage('SonarQube Quality Gate') {
+        stage('SonarQube Analysis') {
             steps {
-                // Pauses pipeline until SonarQube sends the webhook result back via ngrok
+                withSonarQubeEnv('Local-SonarQube') {
+                    sh '''
+                        mvn -B sonar:sonar \
+                        -Dsonar.projectKey=simple-docker-webapp \
+                        -Dsonar.projectName=simple-docker-webapp
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
                 timeout(time: 5, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
@@ -50,31 +59,65 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh "docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} ."
+                sh "docker build -t ${DOCKERHUB_REPO}:${IMAGE_TAG} -t ${DOCKERHUB_REPO}:latest ."
             }
         }
 
-        stage('Push Docker Image') {
+        stage('Push to Docker Hub') {
             steps {
                 withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-creds',
+                    credentialsId: DOCKERHUB_CRED_ID,
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
-                    sh """
-                        echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
-                        docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push ${DOCKERHUB_REPO}:${IMAGE_TAG}
+                        docker push ${DOCKERHUB_REPO}:latest
                         docker logout
-                    """
+                    '''
                 }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh """
+                    docker pull ${DOCKERHUB_REPO}:latest
+                    docker stop ${CONTAINER_NAME} || true
+                    docker rm ${CONTAINER_NAME} || true
+                    docker run -d --name ${CONTAINER_NAME} -p ${APP_PORT}:8080 --restart unless-stopped ${DOCKERHUB_REPO}:latest
+                """
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                sh """
+                    for i in \$(seq 1 10); do
+                        if curl -sf http://localhost:${APP_PORT}/actuator/health; then
+                            echo 'App is healthy'
+                            exit 0
+                        fi
+                        echo 'Waiting for app to become healthy...'
+                        sleep 5
+                    done
+                    echo 'Health check failed after retries'
+                    exit 1
+                """
             }
         }
     }
 
     post {
+        success {
+            echo "Built ${DOCKERHUB_REPO}:${IMAGE_TAG}, pushed to Docker Hub, and deployed locally"
+        }
+        failure {
+            echo 'Pipeline failed — check console output above.'
+        }
         always {
-            // Cleans up local Docker images on the EC2 agent to save disk space
-            sh "docker rmi ${DOCKER_IMAGE}:${BUILD_NUMBER} || true"
+            sh 'docker image prune -f || true'
         }
     }
 }
