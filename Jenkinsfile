@@ -12,6 +12,7 @@ pipeline {
         IMAGE_TAG         = "${env.BUILD_NUMBER}"
         CONTAINER_NAME    = 'simple-docker-webapp'
         APP_PORT          = '8080'
+        MAVEN_OPTS        = '-Xmx512m -XX:MaxMetaspaceSize=256m'
     }
 
     options {
